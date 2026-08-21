@@ -8,6 +8,7 @@
 import { motion } from 'framer-motion'
 import { Play, Pause, Music } from 'lucide-react'
 import { useGame } from '../store/context'
+import { getCtx } from '../lib/audio'
 
 export default function MusicBar() {
   const { state, dispatch } = useGame()
@@ -45,7 +46,12 @@ export default function MusicBar() {
 
       <button
         type="button"
-        onClick={() => dispatch({ type: 'setMusicOn', value: !state.musicOn })}
+        onClick={() => {
+          // Resume the shared AudioContext synchronously inside the tap
+          // gesture — mobile browsers (esp. iOS) reject async resume().
+          getCtx()
+          dispatch({ type: 'setMusicOn', value: !state.musicOn })
+        }}
         aria-label={playing ? 'Pause music' : 'Play music'}
         className={`flex items-center gap-1.5 rounded-lg px-3 py-2 font-display text-[11px] font-bold tracking-widest uppercase ${
           playing

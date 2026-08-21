@@ -39,18 +39,27 @@ function ensureNodes() {
   if (!master) {
     master = ctx.createGain()
     master.gain.value = volume
-    master.connect(ctx.destination)
+    // Limiter keeps the synth loud but clip-free on phone speakers.
+    const comp = ctx.createDynamicsCompressor()
+    comp.threshold.value = -18
+    comp.knee.value = 20
+    comp.ratio.value = 8
+    comp.attack.value = 0.003
+    comp.release.value = 0.25
+    master.connect(comp).connect(ctx.destination)
   }
   return ctx
 }
 
 /** Start (or restart) the soundtrack. Safe to call repeatedly. */
 export function startMusic() {
+  const ctx = getCtx()
+  if (!ctx) return
   ensureNodes()
   if (running) return
   running = true
   step = 0
-  nextNote = getCtx().currentTime + 0.06
+  nextNote = ctx.currentTime + 0.06
   schedId = window.setInterval(schedule, 25)
 }
 
@@ -77,7 +86,13 @@ export function isMusicRunning() {
 
 function schedule() {
   const ctx = getCtx()
-  if (!running || ctx.state !== 'running') return
+  if (!running || !ctx || ctx.state !== 'running') return
+  // If we fell behind (e.g. context was suspended during a resume), jump
+  // ahead instead of firing a burst of overdue notes.
+  if (nextNote < ctx.currentTime - 0.4) {
+    nextNote = ctx.currentTime + 0.06
+    step = 0
+  }
   while (nextNote < ctx.currentTime + 0.12) {
     scheduleStep(step % STEPS, nextNote)
     nextNote += SIXTEENTH
