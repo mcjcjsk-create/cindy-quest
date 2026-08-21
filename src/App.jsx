@@ -13,6 +13,7 @@ import StatsModal from './components/StatsModal'
 import WorkoutHistoryLog, { RecentSessions } from './components/WorkoutHistoryLog'
 import LevelUpOverlay from './components/LevelUpOverlay'
 import FloatingNotif from './components/FloatingNotif'
+import MusicBar from './components/MusicBar'
 
 function Shell() {
   const [statusOpen, setStatusOpen] = useState(false)
@@ -22,6 +23,7 @@ function Shell() {
     <div className="relative">
       <BackgroundFX />
       <FloatingNotif />
+      <MusicBar />
 
       <div className="relative z-10">
         <Header onStatus={() => setStatusOpen(true)} onHistory={() => setHistoryOpen(true)} />

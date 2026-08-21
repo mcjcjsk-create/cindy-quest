@@ -1,27 +1,19 @@
 /**
  * sound.js
  * Tiny WebAudio synth for "system" style feedback beeps.
- * No audio assets required; fully offline.
+ * Shares the single AudioContext from audio.js so any user gesture
+ * (a tap) resumes both SFX and music at the same time.
  */
+import { getCtx } from './audio'
 
-let ctx = null
 let muted = false
 
 export function setMuted(value) {
   muted = Boolean(value)
 }
 
-function ensureCtx() {
-  if (!ctx) {
-    const AC = window.AudioContext || window.webkitAudioContext
-    if (AC) ctx = new AC()
-  }
-  if (ctx && ctx.state === 'suspended') ctx.resume()
-  return ctx
-}
-
 function tone(freq, start, duration, type = 'square', gain = 0.04) {
-  const ac = ensureCtx()
+  const ac = getCtx()
   if (!ac || muted) return
   const osc = ac.createOscillator()
   const g = ac.createGain()

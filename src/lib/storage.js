@@ -28,6 +28,8 @@ export const DEFAULT_STATE = {
   unlockedTitles: [],
   history: [],
   session: null,
+  musicOn: false,
+  musicVolume: 0.7,
 }
 
 /** Merge raw parsed data over defaults and repair any broken fields. */
@@ -43,6 +45,8 @@ function normalize(parsed) {
   base.streak = Math.max(0, Number(base.streak) || 0)
   base.unlockedTitles = Array.isArray(base.unlockedTitles) ? base.unlockedTitles : []
   base.history = Array.isArray(base.history) ? base.history.slice(0, 60) : []
+  base.musicOn = Boolean(base.musicOn)
+  base.musicVolume = Math.max(0, Math.min(1, Number(base.musicVolume) || 0.7))
 
   // Daily stamina recovery.
   if (base.staminaDate !== todayStr()) {

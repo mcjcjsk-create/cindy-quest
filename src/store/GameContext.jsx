@@ -30,6 +30,7 @@ import {
 } from '../lib/gamification'
 import { loadState, saveState } from '../lib/storage'
 import { setMuted, playLevelUp } from '../lib/sound'
+import { startMusic, stopMusic, setMusicVolume } from '../lib/music'
 import { GameContext } from './context'
 
 /** Apply raw EXP, scaled by passive title bonuses. Handles multi-level ups. */
@@ -174,6 +175,15 @@ function reducer(state, action) {
     case 'setMuted':
       return { ...state, muted: action.value }
 
+    case 'setMusicOn':
+      return { ...state, musicOn: Boolean(action.value) }
+
+    case 'setMusicVolume':
+      return {
+        ...state,
+        musicVolume: Math.max(0, Math.min(1, Number(action.value) || 0)),
+      }
+
     default:
       return state
   }
@@ -187,6 +197,16 @@ export function GameProvider({ children }) {
     saveState(state)
     setMuted(state.muted)
   }, [state])
+
+  // Music engine sync: plays while enabled + not globally muted.
+  // Music intentionally keeps playing after a session ends until stopped.
+  useEffect(() => {
+    if (state.musicOn && !state.muted) startMusic()
+    else stopMusic()
+  }, [state.musicOn, state.muted])
+  useEffect(() => {
+    setMusicVolume(state.musicVolume)
+  }, [state.musicVolume])
 
   // Notification hub state.
   const [notifs, setNotifs] = useState([])
