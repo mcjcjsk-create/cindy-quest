@@ -3,6 +3,8 @@
  * The interactive workout engine:
  *  - circular neon countdown timer (15:00) with start/pause/reset
  *  - tap-to-count rep tracker with per-exercise progress
+ *  - configurable reps per exercise (0 = auto-skip)
+ *  - skip button to move past an exercise mid-round
  *  - auto round counter, live pacing (RPM) and projected score
  *  - complete / abort session flows wired into the game store
  */
@@ -20,9 +22,11 @@ import {
   Zap,
   Target,
   Dumbbell,
+  SkipForward,
+  SlidersHorizontal,
 } from 'lucide-react'
 import { useGame } from '../store/context'
-import { WORKOUT, REPS_PER_ROUND } from '../data/workout'
+import { WORKOUT } from '../data/workout'
 import {
   WORKOUT_WINDOW_SEC,
   BASE_EXP,
@@ -87,11 +91,72 @@ function CircularTimer({ remaining, total }) {
 }
 
 export default function CindyTimerTracker() {
-  const { dispatch, notify } = useGame()
+  const { state, dispatch, notify } = useGame()
 
   const [run, setRunState] = useState(null)
   const runRef = useRef(null)
   const [flash, setFlash] = useState(null)
+
+  // Configured reps from persisted player settings.
+  const repsPerRound = WORKOUT.exercises.reduce((a, ex) => a + state.workoutReps[ex.id], 0)
+  const targetReps = (exId) => state.workoutReps[exId] ?? 0
+
+  /**
+   * Auto-advance through exercises configured with 0 reps.
+   * Wrapping past the last exercise counts a round (mirrors the skip rule).
+   */
+  function resolveZeroSkips(rounds, active, reps) {
+    let r = rounds
+    let a = active
+    let nextReps = { ...reps }
+    let guard = 0
+    while (guard < WORKOUT.exercises.length) {
+      if (targetReps(WORKOUT.exercises[a].id) > 0) break
+      if (a === WORKOUT.exercises.length - 1) {
+        r += 1
+        nextReps = { 0: 0, 1: 0, 2: 0 }
+        a = 0
+      } else {
+        a += 1
+        nextReps[a] = 0
+      }
+      guard += 1
+    }
+    return { rounds: r, active: a, reps: nextReps }
+  }
+
+  /** Advance one exercise forward (wrapping the round), then auto-skip 0-rep ones. */
+  function stepForward(rounds, active, reps) {
+    const exCount = WORKOUT.exercises.length
+    let r = rounds
+    let nextReps = { ...reps }
+    let a = active
+    if (a === exCount - 1) {
+      r += 1
+      nextReps = { 0: 0, 1: 0, 2: 0 }
+      a = 0
+    } else {
+      a += 1
+      nextReps[a] = 0
+    }
+    return resolveZeroSkips(r, a, nextReps)
+  }
+
+  /** Apply a step/round transition: round EXP + sound + flash. */
+  function applyStep(r, next) {
+    if (next.rounds > r.rounds) {
+      dispatch({ type: 'roundCompleted' })
+      playRound()
+      notify(`ROUND ${next.rounds} COMPLETE!`, 'round')
+    }
+    setFlash(next.active)
+    window.setTimeout(() => setFlash((f) => (f === next.active ? null : f)), 400)
+    setRun({ ...r, rounds: next.rounds, active: next.active, reps: next.reps })
+  }
+
+  function setRep(exId, val) {
+    dispatch({ type: 'setWorkoutReps', reps: { ...state.workoutReps, [exId]: val } })
+  }
 
   const setRun = (updater) =>
     setRunState((prev) => {
@@ -119,13 +184,15 @@ export default function CindyTimerTracker() {
   }, [run?.status])
 
   function startSession() {
+    if (repsPerRound === 0) return
     dispatch({ type: 'startWorkout' })
+    const init = resolveZeroSkips(0, 0, { 0: 0, 1: 0, 2: 0 })
     setRun({
       status: 'running',
       remaining: WORKOUT_WINDOW_SEC,
-      rounds: 0,
-      reps: { 0: 0, 1: 0, 2: 0 },
-      active: 0,
+      rounds: init.rounds,
+      reps: init.reps,
+      active: init.active,
     })
   }
 
@@ -147,30 +214,24 @@ export default function CindyTimerTracker() {
     const r = runRef.current
     if (!r || r.status !== 'running') return
     const ex = WORKOUT.exercises[r.active]
+    const target = targetReps(ex.id)
+    if (target <= 0) return
     const reps = { ...r.reps, [r.active]: r.reps[r.active] + 1 }
     dispatch({ type: 'repCompleted', exerciseId: ex.id })
     playRep()
 
-    let rounds = r.rounds
-    let active = r.active
-    let nextReps = reps
-
-    if (reps[r.active] >= ex.reps) {
-      if (r.active === WORKOUT.exercises.length - 1) {
-        rounds += 1
-        nextReps = { 0: 0, 1: 0, 2: 0 }
-        active = 0
-        dispatch({ type: 'roundCompleted' })
-        playRound()
-        notify(`ROUND ${rounds} COMPLETE!`, 'round')
-      } else {
-        active = r.active + 1
-        nextReps = { ...reps, [active]: 0 }
-      }
-      setFlash(active)
-      window.setTimeout(() => setFlash((f) => (f === active ? null : f)), 400)
+    if (reps[r.active] >= target) {
+      applyStep(r, stepForward(r.rounds, r.active, reps))
+    } else {
+      setRun({ ...r, reps })
     }
-    setRun({ ...r, reps: nextReps, rounds, active })
+  }
+
+  /** Skip the active exercise without counting its reps. */
+  function skipExercise() {
+    const r = runRef.current
+    if (!r || r.status !== 'running') return
+    applyStep(r, stepForward(r.rounds, r.active, r.reps))
   }
 
   function undoRep() {
@@ -182,18 +243,18 @@ export default function CindyTimerTracker() {
   }
 
   function resetRun() {
-    setRun((r) =>
-      r
-        ? {
-            ...r,
-            status: 'paused',
-            remaining: WORKOUT_WINDOW_SEC,
-            rounds: 0,
-            reps: { 0: 0, 1: 0, 2: 0 },
-            active: 0,
-          }
-        : r,
-    )
+    setRun((r) => {
+      if (!r) return r
+      const init = resolveZeroSkips(0, 0, { 0: 0, 1: 0, 2: 0 })
+      return {
+        ...r,
+        status: 'paused',
+        remaining: WORKOUT_WINDOW_SEC,
+        rounds: 0,
+        reps: init.reps,
+        active: init.active,
+      }
+    })
   }
 
   function abortSession() {
@@ -222,29 +283,97 @@ export default function CindyTimerTracker() {
         </div>
 
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
-          {WORKOUT.exercises.map((ex) => (
-            <div key={ex.id} className="rounded-lg border border-slate-800 bg-slate-900/40 p-3">
-              <div className="flex items-center gap-2">
-                <span className="flex h-8 w-8 items-center justify-center rounded-md bg-cyber/10">
-                  <ex.icon className="h-4 w-4 text-cyber" />
-                </span>
-                <div>
-                  <div className="text-sm font-bold text-slate-200">{ex.name}</div>
-                  <div className="text-[11px] text-slate-500">{ex.stat}</div>
+          {WORKOUT.exercises.map((ex) => {
+            const val = state.workoutReps[ex.id]
+            return (
+              <div key={ex.id} className="rounded-lg border border-slate-800 bg-slate-900/40 p-3">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-8 w-8 items-center justify-center rounded-md bg-cyber/10">
+                    <ex.icon className="h-4 w-4 text-cyber" />
+                  </span>
+                  <div>
+                    <div className="text-sm font-bold text-slate-200">{ex.name}</div>
+                    <div className="text-[11px] text-slate-500">{ex.stat}</div>
+                  </div>
+                </div>
+                <div className="mt-2 font-display text-2xl font-black text-cyber text-glow-cyber">
+                  {val}
+                  <span className="ml-1 text-sm font-bold text-slate-500">reps</span>
                 </div>
               </div>
-              <div className="mt-2 font-display text-2xl font-black text-cyber text-glow-cyber">
-                {ex.reps}
-                <span className="ml-1 text-sm font-bold text-slate-500">reps</span>
-              </div>
-            </div>
-          ))}
+            )
+          })}
+        </div>
+
+        {/* Round reps settings */}
+        <div className="mt-4 rounded-lg border border-slate-800 bg-slate-900/40 p-3">
+          <div className="flex items-center justify-between">
+            <span className="flex items-center gap-1.5">
+              <SlidersHorizontal className="h-3.5 w-3.5 text-arcane" />
+              <span className="hud-label">Round Reps</span>
+            </span>
+            <span className="font-display text-[11px] font-bold text-slate-400">
+              {repsPerRound} reps / round
+            </span>
+          </div>
+          <div className="mt-2 space-y-2">
+            {WORKOUT.exercises.map((ex) => {
+              const val = state.workoutReps[ex.id]
+              const off = val === 0
+              return (
+                <div key={ex.id} className="flex items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span
+                      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${
+                        off ? 'bg-alert/10' : 'bg-cyber/10'
+                      }`}
+                    >
+                      <ex.icon className={`h-3.5 w-3.5 ${off ? 'text-alert' : 'text-cyber'}`} />
+                    </span>
+                    <span className="truncate text-sm font-semibold text-slate-200">{ex.name}</span>
+                    {off && <span className="text-[10px] font-bold tracking-widest text-alert uppercase">Skip</span>}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setRep(ex.id, val - 1)}
+                      className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-700 bg-slate-900/60 font-display text-base font-bold text-slate-300 transition hover:border-slate-500"
+                      aria-label={`Decrease ${ex.name} reps`}
+                    >
+                      −
+                    </button>
+                    <span
+                      className={`w-10 text-center font-display text-base font-black tabular-nums ${
+                        off ? 'text-alert' : 'text-cyber'
+                      }`}
+                    >
+                      {val}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setRep(ex.id, val + 1)}
+                      className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-700 bg-slate-900/60 font-display text-base font-bold text-slate-300 transition hover:border-slate-500"
+                      aria-label={`Increase ${ex.name} reps`}
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          <p className="mt-2 text-[11px] text-slate-500">
+            Set a round to 0 to skip it automatically. Use the SKIP button mid-session when a round is too much.
+          </p>
+          {repsPerRound === 0 && (
+            <p className="mt-1 text-[11px] font-semibold text-alert">Set at least 1 rep to begin.</p>
+          )}
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-slate-400">
           <span className="flex items-center gap-1.5">
             <Dumbbell className="h-4 w-4 text-arcane" />
-            {REPS_PER_ROUND} reps / round
+            {repsPerRound} reps / round
           </span>
           <span className="flex items-center gap-1.5">
             <Zap className="h-4 w-4 text-cyber" />
@@ -259,7 +388,8 @@ export default function CindyTimerTracker() {
         <button
           type="button"
           onClick={startSession}
-          className="neon-btn-cyber mt-5 flex w-full items-center justify-center gap-2 rounded-xl py-4 font-display text-sm font-black tracking-[0.3em] text-cyber text-glow-cyber uppercase"
+          disabled={repsPerRound === 0}
+          className="neon-btn-cyber mt-5 flex w-full items-center justify-center gap-2 rounded-xl py-4 font-display text-sm font-black tracking-[0.3em] text-cyber text-glow-cyber uppercase disabled:cursor-not-allowed disabled:opacity-40"
         >
           <Play className="h-5 w-5" /> Begin Quest
         </button>
@@ -268,7 +398,7 @@ export default function CindyTimerTracker() {
   }
 
   // ---- ACTIVE STATE ----
-  const totalReps = run.reps[0] + run.reps[1] + run.reps[2] + run.rounds * REPS_PER_ROUND
+  const totalReps = run.reps[0] + run.reps[1] + run.reps[2] + run.rounds * repsPerRound
   const isPaused = run.status === 'paused'
 
   return (
@@ -356,6 +486,8 @@ export default function CindyTimerTracker() {
             {WORKOUT.exercises.map((ex, i) => {
               const isActive = i === run.active
               const isFlash = flash === i
+              const target = targetReps(ex.id)
+              const pct = target > 0 ? Math.min(100, (run.reps[i] / target) * 100) : 100
               return (
                 <div
                   key={ex.id}
@@ -381,7 +513,7 @@ export default function CindyTimerTracker() {
                     </div>
                     <div className="font-display text-xl font-black tabular-nums text-slate-200">
                       {run.reps[i]}
-                      <span className="text-sm text-slate-500"> / {ex.reps}</span>
+                      <span className="text-sm text-slate-500"> / {target}</span>
                     </div>
                   </div>
 
@@ -389,7 +521,7 @@ export default function CindyTimerTracker() {
                     <div
                       className="stat-bar-fill"
                       style={{
-                        width: `${Math.min(100, (run.reps[i] / ex.reps) * 100)}%`,
+                        width: `${pct}%`,
                         background: isActive
                           ? 'linear-gradient(90deg,#00f0ff66,#00f0ff)'
                           : 'linear-gradient(90deg,#22d3ee55,#22d3ee)',
@@ -400,17 +532,28 @@ export default function CindyTimerTracker() {
                   </div>
 
                   {isActive && (
-                    <button
-                      type="button"
-                      onClick={tapRep}
-                      className={`mt-3 flex w-full items-center justify-center gap-2 rounded-lg py-3 font-display text-sm font-black tracking-[0.25em] uppercase transition active:scale-[0.98] ${
-                        isFlash
-                          ? 'bg-arcane text-white'
-                          : 'neon-btn-cyber text-cyber text-glow-cyber'
-                      }`}
-                    >
-                      {isFlash ? 'CLEAR!' : `TAP — ${ex.name}`}
-                    </button>
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={tapRep}
+                        className={`flex flex-1 items-center justify-center gap-2 rounded-lg py-3 font-display text-sm font-black tracking-[0.25em] uppercase transition active:scale-[0.98] ${
+                          isFlash
+                            ? 'bg-arcane text-white'
+                            : 'neon-btn-cyber text-cyber text-glow-cyber'
+                        }`}
+                      >
+                        {isFlash ? 'CLEAR!' : `TAP — ${ex.name}`}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={skipExercise}
+                        title="Skip this exercise"
+                        className="flex items-center justify-center gap-1.5 rounded-lg border border-alert/50 bg-alert/10 px-3 py-3 font-display text-[11px] font-bold tracking-widest text-alert uppercase transition hover:bg-alert/20"
+                      >
+                        <SkipForward className="h-4 w-4" />
+                        <span className="hidden sm:inline">Skip</span>
+                      </button>
+                    </div>
                   )}
                 </div>
               )

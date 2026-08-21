@@ -184,6 +184,22 @@ function reducer(state, action) {
         musicVolume: Math.max(0, Math.min(1, Number(action.value) || 0)),
       }
 
+    case 'setWorkoutReps': {
+      const raw = action.reps || {}
+      const clamp = (v, fallback) => {
+        const n = Number(v)
+        return Number.isFinite(n) ? Math.max(0, Math.min(50, Math.round(n))) : fallback
+      }
+      return {
+        ...state,
+        workoutReps: {
+          latPulldown: clamp(raw.latPulldown, state.workoutReps.latPulldown),
+          pushup: clamp(raw.pushup, state.workoutReps.pushup),
+          squat: clamp(raw.squat, state.workoutReps.squat),
+        },
+      }
+    }
+
     default:
       return state
   }

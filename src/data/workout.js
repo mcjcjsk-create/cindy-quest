@@ -14,7 +14,7 @@ export const WORKOUT = {
     {
       id: 'latPulldown',
       name: 'Lat Pulldown',
-      reps: 5,
+      reps: 10,
       stat: 'STR + Back',
       icon: ArrowUp,
     },
@@ -28,12 +28,12 @@ export const WORKOUT = {
     {
       id: 'squat',
       name: 'Air Squats',
-      reps: 15,
+      reps: 10,
       stat: 'VIT + AGI + Legs',
       icon: Dumbbell,
     },
   ],
 }
 
-/** Sum of reps for one full round. */
+/** Sum of reps for one full round (default protocol). */
 export const REPS_PER_ROUND = WORKOUT.exercises.reduce((a, e) => a + e.reps, 0)

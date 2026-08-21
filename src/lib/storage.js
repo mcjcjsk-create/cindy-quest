@@ -30,6 +30,7 @@ export const DEFAULT_STATE = {
   session: null,
   musicOn: false,
   musicVolume: 0.8,
+  workoutReps: { latPulldown: 10, pushup: 10, squat: 10 },
 }
 
 /** Merge raw parsed data over defaults and repair any broken fields. */
@@ -47,6 +48,7 @@ function normalize(parsed) {
   base.history = Array.isArray(base.history) ? base.history.slice(0, 60) : []
   base.musicOn = Boolean(base.musicOn)
   base.musicVolume = Math.max(0, Math.min(1, Number(base.musicVolume) || 0.8))
+  base.workoutReps = normalizeReps(base.workoutReps, DEFAULT_STATE.workoutReps)
 
   // Daily stamina recovery.
   if (base.staminaDate !== todayStr()) {
@@ -54,6 +56,22 @@ function normalize(parsed) {
     base.staminaDate = todayStr()
   }
   return base
+}
+
+/** Clamp a numeric rep value to [0, 50]. */
+function clampRep(v, fallback) {
+  const n = Number(v)
+  return Number.isFinite(n) ? Math.max(0, Math.min(50, Math.round(n))) : fallback
+}
+
+/** Validate per-exercise rep config. */
+function normalizeReps(reps, fallback) {
+  const src = reps && typeof reps === 'object' ? reps : {}
+  return {
+    latPulldown: clampRep(src.latPulldown, fallback.latPulldown),
+    pushup: clampRep(src.pushup, fallback.pushup),
+    squat: clampRep(src.squat, fallback.squat),
+  }
 }
 
 /** Load state from localStorage, falling back to defaults. */

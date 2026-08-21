@@ -22,12 +22,14 @@ Push to `main` → `.github/workflows/deploy.yml` builds and deploys to GitHub P
 - `src/store/GameContext.jsx` — single source of truth: `useReducer` + effects that persist every change to `localStorage` (key `cindy-quest:save:v1`, handled in `src/lib/storage.js`). It also drives the level-up overlay signal, toast notifications, and the music engine.
 - `src/store/context.js` — `GameContext` + `useGame()` hook, split from the provider file because oxlint `react/only-export-components` forbids exporting non-components from a component file (fast-refresh).
 - `src/lib/gamification.js` — all formulas as pure functions (`expToNext = level * 150`, ranks E→S by rounds, `computeStats`, titles + perks). Keep game math here, never inline in components.
-- `src/data/workout.js` — Cindy protocol (Lat Pulldown 5 → Push-up 10 → Squat 15).
+- `src/data/workout.js` — Cindy exercise cycle definition (Lat Pulldown → Push-up → Squat). Actual reps are NOT read from here at runtime: the tracker uses the player's persisted config in `state.workoutReps` (default `{10,10,10}`; `0` means auto-skip that exercise). `workout.js` reps are only the fallback/canonical default.
 - Audio: `src/lib/audio.js` exports one shared `AudioContext` (resume-on-gesture). `src/lib/sound.js` (SFX) and `src/lib/music.js` (procedural phonk, WebAudio synth, no files) both use it — keep them on the shared context so one tap resumes both.
 
 ## Conventions / gotchas
 - EXP is granted live in the reducer: `+2`/rep, `+25`/round; `workoutFinished` adds `+100` base and writes a history entry. `state.session` tracks in-session totals; `abortWorkout` clears it (live EXP is kept).
 - Rep keying differs: reducer + history use exercise `id` strings (`latPulldown`/`pushup`/`squat`); the tracker's local `run.reps` uses array indices `{0,1,2}`. Do not mix them.
+- Tracker advance logic lives in `stepForward`/`resolveZeroSkips` (component-local): completing OR skipping the last exercise increments the round; exercises configured to `0` reps are auto-skipped. The SKIP button calls `stepForward` without awarding rep EXP.
+- `state.workoutReps` is clamped to `[0, 50]` in the `setWorkoutReps` reducer case and in `storage.normalizeReps`. Begin Quest is disabled when the round total is 0.
 - `CindyTimerTracker` mirrors timer state in `runRef` and updates via a functional `setRun` so the 1s countdown interval never reads stale state — preserve this pattern when touching the timer.
 - Music is manual-only: it starts when the player presses the MusicBar button, and the provider effect keeps it playing after a session ends until stopped. `setMusicOn`/`setMusicVolume` live in game state.
 - Source files are intentionally documented with JSDoc-style header comments — keep/update them.
