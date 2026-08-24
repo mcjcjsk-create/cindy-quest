@@ -3,7 +3,9 @@
  * The interactive workout engine:
  *  - circular neon countdown timer (15:00) with start/pause/reset
  *  - tap-to-count rep tracker with per-exercise progress
- *  - configurable reps per exercise (0 = auto-skip)
+ *  - timed hold exercises (e.g. Hollow Body): start/end early/auto-complete,
+ *    converted to rep-equivalents via SEC_PER_HOLD_REP
+ *  - configurable per-exercise targets (reps, or seconds for holds; 0 = auto-skip)
  *  - skip button to move past an exercise mid-round
  *  - auto round counter, live pacing (RPM) and projected score
  *  - complete / abort session flows wired into the game store
@@ -22,16 +24,18 @@ import {
   Zap,
   Target,
   Dumbbell,
+  Hourglass,
   SkipForward,
   SlidersHorizontal,
 } from 'lucide-react'
 import { useGame } from '../store/context'
-import { WORKOUT } from '../data/workout'
+import { WORKOUT, isHold } from '../data/workout'
 import {
   WORKOUT_WINDOW_SEC,
   BASE_EXP,
   ROUND_EXP,
   REP_EXP,
+  SEC_PER_HOLD_REP,
   fmtClock,
   getRankForRounds,
 } from '../lib/gamification'
@@ -39,6 +43,9 @@ import { playRep, playRound, playComplete, playTick } from '../lib/sound'
 
 const RADIUS = 104
 const CIRC = 2 * Math.PI * RADIUS
+
+/** Zeroed per-index progress map sized to the exercise cycle. */
+const blankProgress = () => Object.fromEntries(WORKOUT.exercises.map((_, i) => [i, 0]))
 
 function CircularTimer({ remaining, total }) {
   const frac = Math.max(0, remaining) / total
@@ -97,12 +104,18 @@ export default function CindyTimerTracker() {
   const runRef = useRef(null)
   const [flash, setFlash] = useState(null)
 
-  // Configured reps from persisted player settings.
-  const repsPerRound = WORKOUT.exercises.reduce((a, ex) => a + state.workoutReps[ex.id], 0)
+  // Configured per-round values from persisted player settings (reps or hold seconds).
+  const cfgTotal = WORKOUT.exercises.reduce((a, ex) => a + state.workoutReps[ex.id], 0)
+  const cfgRepsOnly = WORKOUT.exercises
+    .filter((ex) => !isHold(ex))
+    .reduce((a, ex) => a + state.workoutReps[ex.id], 0)
+  const cfgHoldSec = WORKOUT.exercises
+    .filter(isHold)
+    .reduce((a, ex) => a + state.workoutReps[ex.id], 0)
   const targetReps = (exId) => state.workoutReps[exId] ?? 0
 
   /**
-   * Auto-advance through exercises configured with 0 reps.
+   * Auto-advance through exercises configured with 0.
    * Wrapping past the last exercise counts a round (mirrors the skip rule).
    */
   function resolveZeroSkips(rounds, active, reps) {
@@ -114,7 +127,7 @@ export default function CindyTimerTracker() {
       if (targetReps(WORKOUT.exercises[a].id) > 0) break
       if (a === WORKOUT.exercises.length - 1) {
         r += 1
-        nextReps = { 0: 0, 1: 0, 2: 0 }
+        nextReps = blankProgress()
         a = 0
       } else {
         a += 1
@@ -125,7 +138,7 @@ export default function CindyTimerTracker() {
     return { rounds: r, active: a, reps: nextReps }
   }
 
-  /** Advance one exercise forward (wrapping the round), then auto-skip 0-rep ones. */
+  /** Advance one exercise forward (wrapping the round), then auto-skip 0-target ones. */
   function stepForward(rounds, active, reps) {
     const exCount = WORKOUT.exercises.length
     let r = rounds
@@ -133,7 +146,7 @@ export default function CindyTimerTracker() {
     let a = active
     if (a === exCount - 1) {
       r += 1
-      nextReps = { 0: 0, 1: 0, 2: 0 }
+      nextReps = blankProgress()
       a = 0
     } else {
       a += 1
@@ -165,7 +178,7 @@ export default function CindyTimerTracker() {
       return next
     })
 
-  // Countdown engine.
+  // Countdown engine — also drives the active hold's second-by-second ticking.
   useEffect(() => {
     if (!run || run.status !== 'running') return
     const iv = window.setInterval(() => {
@@ -177,27 +190,69 @@ export default function CindyTimerTracker() {
         finishSession({ ...cur, remaining: 0 })
         return
       }
-      setRun({ ...cur, remaining })
+      let next = { ...cur, remaining }
+      const ex = WORKOUT.exercises[next.active]
+      if (next.hold?.active && isHold(ex)) {
+        const held = next.hold.elapsed + 1
+        next.hold = { ...next.hold, elapsed: held }
+        if (held >= targetReps(ex.id)) {
+          completeHold(next, held)
+          return
+        }
+      }
+      setRun(next)
     }, 1000)
     return () => window.clearInterval(iv)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run?.status])
 
   function startSession() {
-    if (repsPerRound === 0) return
+    if (cfgTotal === 0) return
     dispatch({ type: 'startWorkout' })
-    const init = resolveZeroSkips(0, 0, { 0: 0, 1: 0, 2: 0 })
+    const init = resolveZeroSkips(0, 0, blankProgress())
     setRun({
       status: 'running',
       remaining: WORKOUT_WINDOW_SEC,
       rounds: init.rounds,
       reps: init.reps,
       active: init.active,
+      hold: null,
     })
+  }
+
+  /** Bank a finished/abandoned hold as rep-equivalents, then advance the cycle. */
+  function completeHold(r, secondsHeld) {
+    const ex = WORKOUT.exercises[r.active]
+    const earned = Math.floor(Math.max(0, secondsHeld) / SEC_PER_HOLD_REP)
+    if (earned > 0) {
+      dispatch({ type: 'holdCompleted', exerciseId: ex.id, reps: earned })
+      playRep()
+    }
+    applyStep(r, stepForward(r.rounds, r.active, { ...r.reps, [r.active]: r.reps[r.active] + earned }))
+  }
+
+  function startHold() {
+    const r = runRef.current
+    if (!r || r.status !== 'running') return
+    const ex = WORKOUT.exercises[r.active]
+    if (!isHold(ex) || r.hold?.active) return
+    setRun({ ...r, hold: { active: true, elapsed: 0 } })
+  }
+
+  function endHoldEarly() {
+    const r = runRef.current
+    if (!r || r.status !== 'running' || !r.hold?.active) return
+    completeHold(r, r.hold.elapsed)
   }
 
   function finishSession(r = runRef.current) {
     if (!r) return
+    // Credit any hold still in progress when the session ends.
+    const ex = WORKOUT.exercises[r.active]
+    if (r.hold?.active && isHold(ex)) {
+      const earned = Math.floor(r.hold.elapsed / SEC_PER_HOLD_REP)
+      if (earned > 0) dispatch({ type: 'holdCompleted', exerciseId: ex.id, reps: earned })
+    }
     const elapsed = WORKOUT_WINDOW_SEC - r.remaining
     dispatch({
       type: 'workoutFinished',
@@ -245,7 +300,7 @@ export default function CindyTimerTracker() {
   function resetRun() {
     setRun((r) => {
       if (!r) return r
-      const init = resolveZeroSkips(0, 0, { 0: 0, 1: 0, 2: 0 })
+      const init = resolveZeroSkips(0, 0, blankProgress())
       return {
         ...r,
         status: 'paused',
@@ -253,6 +308,7 @@ export default function CindyTimerTracker() {
         rounds: 0,
         reps: init.reps,
         active: init.active,
+        hold: null,
       }
     })
   }
@@ -298,28 +354,32 @@ export default function CindyTimerTracker() {
                 </div>
                 <div className="mt-2 font-display text-2xl font-black text-cyber text-glow-cyber">
                   {val}
-                  <span className="ml-1 text-sm font-bold text-slate-500">reps</span>
+                  <span className="ml-1 text-sm font-bold text-slate-500">
+                    {isHold(ex) ? 'sec' : 'reps'}
+                  </span>
                 </div>
               </div>
             )
           })}
         </div>
 
-        {/* Round reps settings */}
+        {/* Round settings */}
         <div className="mt-4 rounded-lg border border-slate-800 bg-slate-900/40 p-3">
           <div className="flex items-center justify-between">
             <span className="flex items-center gap-1.5">
               <SlidersHorizontal className="h-3.5 w-3.5 text-arcane" />
-              <span className="hud-label">Round Reps</span>
+              <span className="hud-label">Round Config</span>
             </span>
             <span className="font-display text-[11px] font-bold text-slate-400">
-              {repsPerRound} reps / round
+              {cfgRepsOnly} reps · {cfgHoldSec}s hold / round
             </span>
           </div>
           <div className="mt-2 space-y-2">
             {WORKOUT.exercises.map((ex) => {
               const val = state.workoutReps[ex.id]
               const off = val === 0
+              const hold = isHold(ex)
+              const step = hold ? 5 : 1
               return (
                 <div key={ex.id} className="flex items-center justify-between gap-2">
                   <div className="flex min-w-0 items-center gap-2">
@@ -336,9 +396,9 @@ export default function CindyTimerTracker() {
                   <div className="flex items-center gap-1.5">
                     <button
                       type="button"
-                      onClick={() => setRep(ex.id, val - 1)}
+                      onClick={() => setRep(ex.id, val - step)}
                       className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-700 bg-slate-900/60 font-display text-base font-bold text-slate-300 transition hover:border-slate-500"
-                      aria-label={`Decrease ${ex.name} reps`}
+                      aria-label={`Decrease ${ex.name} ${hold ? 'seconds' : 'reps'}`}
                     >
                       −
                     </button>
@@ -351,9 +411,9 @@ export default function CindyTimerTracker() {
                     </span>
                     <button
                       type="button"
-                      onClick={() => setRep(ex.id, val + 1)}
+                      onClick={() => setRep(ex.id, val + step)}
                       className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-700 bg-slate-900/60 font-display text-base font-bold text-slate-300 transition hover:border-slate-500"
-                      aria-label={`Increase ${ex.name} reps`}
+                      aria-label={`Increase ${ex.name} ${hold ? 'seconds' : 'reps'}`}
                     >
                       +
                     </button>
@@ -363,21 +423,26 @@ export default function CindyTimerTracker() {
             })}
           </div>
           <p className="mt-2 text-[11px] text-slate-500">
-            Set a round to 0 to skip it automatically. Use the SKIP button mid-session when a round is too much.
+            Tap exercises count in reps; holds count in seconds (±5). Set a value to 0 to skip it automatically.
+            Use SKIP mid-session when an exercise is too much.
           </p>
-          {repsPerRound === 0 && (
-            <p className="mt-1 text-[11px] font-semibold text-alert">Set at least 1 rep to begin.</p>
+          {cfgTotal === 0 && (
+            <p className="mt-1 text-[11px] font-semibold text-alert">Set at least 1 rep or second to begin.</p>
           )}
         </div>
 
-        <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-slate-400">
+        <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-slate-400">
           <span className="flex items-center gap-1.5">
             <Dumbbell className="h-4 w-4 text-arcane" />
-            {repsPerRound} reps / round
+            {cfgRepsOnly} reps · {cfgHoldSec}s hold / round
           </span>
           <span className="flex items-center gap-1.5">
             <Zap className="h-4 w-4 text-cyber" />
             +{REP_EXP} EXP / rep · +{ROUND_EXP} EXP / round
+          </span>
+          <span className="flex items-center gap-1.5">
+            <Hourglass className="h-4 w-4 text-cyber" />
+            Holds: +{REP_EXP} EXP per {SEC_PER_HOLD_REP}s held
           </span>
           <span className="flex items-center gap-1.5">
             <Flag className="h-4 w-4 text-alert" />
@@ -388,7 +453,7 @@ export default function CindyTimerTracker() {
         <button
           type="button"
           onClick={startSession}
-          disabled={repsPerRound === 0}
+          disabled={cfgTotal === 0}
           className="neon-btn-cyber mt-5 flex w-full items-center justify-center gap-2 rounded-xl py-4 font-display text-sm font-black tracking-[0.3em] text-cyber text-glow-cyber uppercase disabled:cursor-not-allowed disabled:opacity-40"
         >
           <Play className="h-5 w-5" /> Begin Quest
@@ -398,7 +463,8 @@ export default function CindyTimerTracker() {
   }
 
   // ---- ACTIVE STATE ----
-  const totalReps = run.reps[0] + run.reps[1] + run.reps[2] + run.rounds * repsPerRound
+  const doneUnits = Object.values(run.reps).reduce((a, b) => a + b, 0)
+  const totalReps = doneUnits + run.rounds * cfgTotal
   const isPaused = run.status === 'paused'
 
   return (
@@ -486,8 +552,13 @@ export default function CindyTimerTracker() {
             {WORKOUT.exercises.map((ex, i) => {
               const isActive = i === run.active
               const isFlash = flash === i
+              const hold = isHold(ex)
               const target = targetReps(ex.id)
-              const pct = target > 0 ? Math.min(100, (run.reps[i] / target) * 100) : 100
+              const holding = isActive && hold && run.hold?.active
+              const holdElapsed = holding ? run.hold.elapsed : 0
+              const shown = hold ? (holding ? holdElapsed : 0) : run.reps[i]
+              const pct = target > 0 ? Math.min(100, (shown / target) * 100) : 100
+              const banked = Math.floor(holdElapsed / SEC_PER_HOLD_REP)
               return (
                 <div
                   key={ex.id}
@@ -511,9 +582,17 @@ export default function CindyTimerTracker() {
                         <div className="text-[11px] text-slate-500">{ex.stat}</div>
                       </div>
                     </div>
-                    <div className="font-display text-xl font-black tabular-nums text-slate-200">
-                      {run.reps[i]}
-                      <span className="text-sm text-slate-500"> / {target}</span>
+                    <div
+                      className={`font-display text-xl font-black tabular-nums text-slate-200 ${
+                        holding ? 'animate-pulse' : ''
+                      }`}
+                    >
+                      {hold ? `${shown}s` : shown}
+                      <span className="text-sm text-slate-500">
+                        {' '}
+                        / {target}
+                        {hold ? 's' : ''}
+                      </span>
                     </div>
                   </div>
 
@@ -522,10 +601,12 @@ export default function CindyTimerTracker() {
                       className="stat-bar-fill"
                       style={{
                         width: `${pct}%`,
-                        background: isActive
-                          ? 'linear-gradient(90deg,#00f0ff66,#00f0ff)'
-                          : 'linear-gradient(90deg,#22d3ee55,#22d3ee)',
-                        boxShadow: isActive ? '0 0 10px #00f0ff88' : 'none',
+                        background: holding
+                          ? 'linear-gradient(90deg,#c084fc66,#a855f7)'
+                          : isActive
+                            ? 'linear-gradient(90deg,#00f0ff66,#00f0ff)'
+                            : 'linear-gradient(90deg,#22d3ee55,#22d3ee)',
+                        boxShadow: isActive && !holding ? '0 0 10px #00f0ff88' : 'none',
                         transition: 'width 0.25s ease',
                       }}
                     />
@@ -533,26 +614,74 @@ export default function CindyTimerTracker() {
 
                   {isActive && (
                     <div className="mt-3 flex gap-2">
-                      <button
-                        type="button"
-                        onClick={tapRep}
-                        className={`flex flex-1 items-center justify-center gap-2 rounded-lg py-3 font-display text-sm font-black tracking-[0.25em] uppercase transition active:scale-[0.98] ${
-                          isFlash
-                            ? 'bg-arcane text-white'
-                            : 'neon-btn-cyber text-cyber text-glow-cyber'
-                        }`}
-                      >
-                        {isFlash ? 'CLEAR!' : `TAP — ${ex.name}`}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={skipExercise}
-                        title="Skip this exercise"
-                        className="flex items-center justify-center gap-1.5 rounded-lg border border-alert/50 bg-alert/10 px-3 py-3 font-display text-[11px] font-bold tracking-widest text-alert uppercase transition hover:bg-alert/20"
-                      >
-                        <SkipForward className="h-4 w-4" />
-                        <span className="hidden sm:inline">Skip</span>
-                      </button>
+                      {                      hold ? (
+                        holding ? (
+                          <>
+                            <button
+                              type="button"
+                              onClick={endHoldEarly}
+                              className="neon-btn-cyber flex flex-1 items-center justify-center gap-2 rounded-lg py-3 font-display text-sm font-black tracking-[0.25em] uppercase transition active:scale-[0.98] text-cyber text-glow-cyber"
+                            >
+                              {banked > 0 ? `END HOLD — BANK ${banked} REP${banked > 1 ? 'S' : ''}` : 'END HOLD'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={skipExercise}
+                              title="Skip this exercise (no credit)"
+                              className="flex items-center justify-center gap-1.5 rounded-lg border border-alert/50 bg-alert/10 px-3 py-3 font-display text-[11px] font-bold tracking-widest text-alert uppercase transition hover:bg-alert/20"
+                            >
+                              <SkipForward className="h-4 w-4" />
+                              <span className="hidden sm:inline">Skip</span>
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={startHold}
+                              className={`flex flex-1 items-center justify-center gap-2 rounded-lg py-3 font-display text-sm font-black tracking-[0.25em] uppercase transition active:scale-[0.98] ${
+                                isFlash
+                                  ? 'bg-arcane text-white'
+                                  : 'neon-btn-cyber text-cyber text-glow-cyber'
+                              }`}
+                            >
+                              START HOLD — {target}s
+                            </button>
+                            <button
+                              type="button"
+                              onClick={skipExercise}
+                              title="Skip this exercise"
+                              className="flex items-center justify-center gap-1.5 rounded-lg border border-alert/50 bg-alert/10 px-3 py-3 font-display text-[11px] font-bold tracking-widest text-alert uppercase transition hover:bg-alert/20"
+                            >
+                              <SkipForward className="h-4 w-4" />
+                              <span className="hidden sm:inline">Skip</span>
+                            </button>
+                          </>
+                        )
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={tapRep}
+                            className={`flex flex-1 items-center justify-center gap-2 rounded-lg py-3 font-display text-sm font-black tracking-[0.25em] uppercase transition active:scale-[0.98] ${
+                              isFlash
+                                ? 'bg-arcane text-white'
+                                : 'neon-btn-cyber text-cyber text-glow-cyber'
+                            }`}
+                          >
+                            {isFlash ? 'CLEAR!' : `TAP — ${ex.name}`}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={skipExercise}
+                            title="Skip this exercise"
+                            className="flex items-center justify-center gap-1.5 rounded-lg border border-alert/50 bg-alert/10 px-3 py-3 font-display text-[11px] font-bold tracking-widest text-alert uppercase transition hover:bg-alert/20"
+                          >
+                            <SkipForward className="h-4 w-4" />
+                            <span className="hidden sm:inline">Skip</span>
+                          </button>
+                        </>
+                      )}
                     </div>
                   )}
                 </div>

@@ -19,6 +19,9 @@ export const ROUND_EXP = 25
 /** Performance EXP per individual rep. */
 export const REP_EXP = 2
 
+/** Hold-to-rep conversion: this many seconds of a timed hold equals one rep. */
+export const SEC_PER_HOLD_REP = 3
+
 /** Stamina drained per completed session. */
 export const STAMINA_COST = 20
 
@@ -134,13 +137,18 @@ export function expMultiplier(unlockedIds) {
 /**
  * Derived player stats. Displayed with one decimal.
  *  - STR scales with pull + push volume.
- *  - VIT scales with squat volume and consistency streak.
+ *  - VIT scales with squat + core-hold volume and consistency streak.
  *  - AGI scales with best pace (rounds per minute).
  */
 export function computeStats(state) {
   const round1 = (n) => Math.round(n * 10) / 10
   const str = round1(5 + (state.lifetimeReps.latPulldown + state.lifetimeReps.pushup) * 0.15)
-  const vit = round1(5 + state.lifetimeReps.squat * 0.12 + state.streak * 2)
+  const vit = round1(
+    5 +
+      state.lifetimeReps.squat * 0.12 +
+      (state.lifetimeReps.hollowBody || 0) * 0.08 +
+      state.streak * 2,
+  )
   const agi = round1(5 + state.bestRpm * 2.5)
   return { str, vit, agi }
 }

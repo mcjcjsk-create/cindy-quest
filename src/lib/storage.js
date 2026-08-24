@@ -18,7 +18,7 @@ export const DEFAULT_STATE = {
   stamina: 100,
   staminaDate: todayStr(),
   muted: false,
-  lifetimeReps: { latPulldown: 0, pushup: 0, squat: 0 },
+  lifetimeReps: { latPulldown: 0, pushup: 0, squat: 0, hollowBody: 0 },
   lifetimeRounds: 0,
   lifetimeTotalReps: 0,
   completedWorkouts: 0,
@@ -30,7 +30,7 @@ export const DEFAULT_STATE = {
   session: null,
   musicOn: false,
   musicVolume: 0.8,
-  workoutReps: { latPulldown: 10, pushup: 10, squat: 10 },
+  workoutReps: { latPulldown: 10, pushup: 10, squat: 10, hollowBody: 20 },
 }
 
 /** Merge raw parsed data over defaults and repair any broken fields. */
@@ -40,6 +40,7 @@ function normalize(parsed) {
     latPulldown: Number(base.lifetimeReps?.latPulldown) || 0,
     pushup: Number(base.lifetimeReps?.pushup) || 0,
     squat: Number(base.lifetimeReps?.squat) || 0,
+    hollowBody: Number(base.lifetimeReps?.hollowBody) || 0,
   }
   base.level = Math.max(1, Number(base.level) || 1)
   base.stamina = Math.max(0, Math.min(100, Number(base.stamina) || 100))
@@ -58,19 +59,20 @@ function normalize(parsed) {
   return base
 }
 
-/** Clamp a numeric rep value to [0, 50]. */
-function clampRep(v, fallback) {
+/** Clamp a numeric rep value to [0, max]. */
+function clampRep(v, fallback, max = 50) {
   const n = Number(v)
-  return Number.isFinite(n) ? Math.max(0, Math.min(50, Math.round(n))) : fallback
+  return Number.isFinite(n) ? Math.max(0, Math.min(max, Math.round(n))) : fallback
 }
 
-/** Validate per-exercise rep config. */
+/** Validate per-exercise round config (reps for tap exercises, seconds for holds). */
 function normalizeReps(reps, fallback) {
   const src = reps && typeof reps === 'object' ? reps : {}
   return {
     latPulldown: clampRep(src.latPulldown, fallback.latPulldown),
     pushup: clampRep(src.pushup, fallback.pushup),
     squat: clampRep(src.squat, fallback.squat),
+    hollowBody: clampRep(src.hollowBody, fallback.hollowBody, 120),
   }
 }
 

@@ -28,6 +28,7 @@ import {
   uid,
   TITLES,
 } from '../lib/gamification'
+import { WORKOUT, isHold } from '../data/workout'
 import { loadState, saveState } from '../lib/storage'
 import { setMuted, playLevelUp } from '../lib/sound'
 import { startMusic, stopMusic, setMusicVolume } from '../lib/music'
@@ -46,6 +47,16 @@ function grantExp(state, raw) {
   }
   return { ...state, level, exp, totalExp }
 }
+
+/** Zeroed per-exercise progress map derived from the workout definition. */
+function blankReps() {
+  return Object.fromEntries(WORKOUT.exercises.map((ex) => [ex.id, 0]))
+}
+
+/** Config clamp ceiling: holds are configured in seconds (up to 120), reps up to 50. */
+const CFG_MAX = Object.fromEntries(
+  WORKOUT.exercises.map((ex) => [ex.id, isHold(ex) ? 120 : 50]),
+)
 
 function reducer(state, action) {
   switch (action.type) {
@@ -81,12 +92,37 @@ function reducer(state, action) {
       return next
     }
 
+    /**
+     * A timed hold ended. `reps` are rep-equivalents (seconds / SEC_PER_HOLD_REP,
+     * floored by the caller). Partial holds under one rep grant nothing.
+     */
+    case 'holdCompleted': {
+      const ex = action.exerciseId
+      const n = Math.max(0, Math.round(action.reps || 0))
+      if (!n) return state
+      const next = {
+        ...state,
+        lifetimeReps: { ...state.lifetimeReps, [ex]: state.lifetimeReps[ex] + n },
+        lifetimeTotalReps: state.lifetimeTotalReps + n,
+      }
+      const before = next.totalExp
+      const granted = grantExp(next, n * REP_EXP)
+      if (granted.session) {
+        granted.session = {
+          ...granted.session,
+          reps: { ...granted.session.reps, [ex]: granted.session.reps[ex] + n },
+          expEarned: granted.session.expEarned + (granted.totalExp - before),
+        }
+      }
+      return granted
+    }
+
     case 'startWorkout':
       return {
         ...state,
         session: {
           startedAt: Date.now(),
-          reps: { latPulldown: 0, pushup: 0, squat: 0 },
+          reps: blankReps(),
           rounds: 0,
           expEarned: 0,
         },
@@ -139,12 +175,11 @@ function reducer(state, action) {
       const sessionExp = state.session?.expEarned ?? 0
       const totalExpEarned = sessionExp + baseGranted
 
-      // Total reps performed in this session.
+      // Total volume performed this session (hold time already converted to rep-equivalents).
       const sessionReps = state.session
         ? { ...state.session.reps }
         : { ...reps }
-      const totalReps =
-        sessionReps.latPulldown + sessionReps.pushup + sessionReps.squat
+      const totalReps = Object.values(sessionReps).reduce((a, b) => a + b, 0)
 
       const elapsedMin = Math.max(durationSec, 1) / 60
       const rpm = rounds / elapsedMin
@@ -186,18 +221,14 @@ function reducer(state, action) {
 
     case 'setWorkoutReps': {
       const raw = action.reps || {}
-      const clamp = (v, fallback) => {
-        const n = Number(v)
-        return Number.isFinite(n) ? Math.max(0, Math.min(50, Math.round(n))) : fallback
+      const workoutReps = { ...state.workoutReps }
+      for (const ex of WORKOUT.exercises) {
+        const v = Number(raw[ex.id])
+        if (Number.isFinite(v)) {
+          workoutReps[ex.id] = Math.max(0, Math.min(CFG_MAX[ex.id], Math.round(v)))
+        }
       }
-      return {
-        ...state,
-        workoutReps: {
-          latPulldown: clamp(raw.latPulldown, state.workoutReps.latPulldown),
-          pushup: clamp(raw.pushup, state.workoutReps.pushup),
-          squat: clamp(raw.squat, state.workoutReps.squat),
-        },
-      }
+      return { ...state, workoutReps }
     }
 
     default:
