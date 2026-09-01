@@ -37,9 +37,7 @@ import {
   WEIGHT_TIERS,
   weightMultiplier,
   getWeightTier,
-  RANKS,
   fmtClock,
-  getRankForRounds,
 } from '../lib/gamification'
 import { playRep, playRound, playComplete, playTick } from '../lib/sound'
 
@@ -380,7 +378,6 @@ export default function CindyTimerTracker() {
   const elapsedMin = run ? Math.max((program.windowSec - run.remaining) / 60, 0) : 0
   const rpm = run && elapsedMin > 0 ? run.rounds / elapsedMin : 0
   const projected = run ? Math.round(rpm * (program.windowSec / 60) * 10) / 10 : 0
-  const projectedRank = getRankForRounds(Math.floor(projected))
 
   // ---- IDLE STATE ----
   if (!run) {
@@ -541,43 +538,6 @@ export default function CindyTimerTracker() {
             <Flag className="h-4 w-4 text-alert" />
             +{BASE_EXP} EXP base on completion
           </span>
-        </div>
-
-        {/* Rank reference table */}
-        <div className="mt-4 rounded-lg border border-slate-800 bg-slate-900/40 p-3">
-          <div className="flex items-center gap-1.5">
-            <Target className="h-3.5 w-3.5 text-arcane" />
-            <span className="hud-label">Rank Requirements</span>
-          </div>
-          <div className="mt-2 grid grid-cols-3 gap-1.5 sm:grid-cols-6">
-            {RANKS.map((rank) => {
-              const currentRank = getRankForRounds(0)
-              const isCurrent = currentRank.id === rank.id
-              return (
-                <div
-                  key={rank.id}
-                  className={`rounded-md border px-2 py-1.5 text-center ${
-                    isCurrent
-                      ? 'border-cyber/50 bg-cyber/10'
-                      : 'border-slate-800 bg-slate-900/40'
-                  }`}
-                >
-                  <div className={`font-display text-sm font-black ${
-                    rank.id === 'S' ? 'text-alert' :
-                    rank.id === 'A' ? 'text-yellow-300' :
-                    rank.id === 'B' ? 'text-arcane' :
-                    rank.id === 'C' ? 'text-cyber' :
-                    'text-slate-400'
-                  }`}>
-                    {rank.id}
-                  </div>
-                  <div className="text-[10px] text-slate-500">
-                    {rank.min === 0 ? 'Start' : `${rank.min}+ rounds`}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
         </div>
 
         <button
@@ -748,7 +708,7 @@ export default function CindyTimerTracker() {
                 {projected.toFixed(1)}
               </div>
               <div className="text-[10px] text-slate-500">
-                Rank {projectedRank.id} @ {fmtClock(program.windowSec)}
+                rounds @ {fmtClock(program.windowSec)}
               </div>
             </div>
           </div>

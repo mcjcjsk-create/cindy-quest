@@ -22,7 +22,7 @@ import {
   expToNext,
   expMultiplier,
   getEligibleTitles,
-  getRankForRounds,
+  getRankForLevel,
   todayStr,
   addDays,
   uid,
@@ -219,7 +219,7 @@ function reducer(state, action) {
           totalReps,
           reps: { ...sessionReps },
           exp: totalExpEarned,
-          rank: getRankForRounds(rounds).id,
+          rank: getRankForLevel(next.level).id,
         },
         ...next.history,
       ].slice(0, 60)

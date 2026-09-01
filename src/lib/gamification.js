@@ -58,23 +58,61 @@ export const STAMINA_COST = 20
 /** Max stamina bar value. */
 export const MAX_STAMINA = 100
 
-/** Rank thresholds based on rounds completed in a session. */
-export const RANKS = [
-  { id: 'E', min: 0, label: 'Rank E', title: 'Sleeper Hunter' },
-  { id: 'D', min: 10, label: 'Rank D', title: 'D-Rank Hunter' },
-  { id: 'C', min: 15, label: 'Rank C', title: 'C-Rank Hunter' },
-  { id: 'B', min: 20, label: 'Rank B', title: 'B-Rank Hunter' },
-  { id: 'A', min: 25, label: 'Rank A', title: 'A-Rank Hunter' },
-  { id: 'S', min: 30, label: 'Rank S', title: 'Beast Mode' },
+/**
+ * Rank thresholds based on player level.
+ * 6 main ranks × 3 sub-ranks (−/normal/+) = 18 total ranks.
+ */
+const MAIN_RANKS = [
+  { id: 'E', min: 1, title: 'Sleeper Hunter' },
+  { id: 'D', min: 5, title: 'D-Rank Hunter' },
+  { id: 'C', min: 10, title: 'C-Rank Hunter' },
+  { id: 'B', min: 20, title: 'B-Rank Hunter' },
+  { id: 'A', min: 35, title: 'A-Rank Hunter' },
+  { id: 'S', min: 50, title: 'Beast Mode' },
 ]
 
-/** Highest rank whose threshold is met by `rounds`. */
-export function getRankForRounds(rounds) {
+/** Generate 18 sub-ranks from the 6 main ranks. */
+function buildRanks() {
+  const out = []
+  for (let i = 0; i < MAIN_RANKS.length; i++) {
+    const cur = MAIN_RANKS[i]
+    const next = MAIN_RANKS[i + 1]
+    const max = next ? next.min - 1 : cur.min + 20
+    const span = max - cur.min
+
+    // Each main rank splits into 3 sub-ranks: minus, normal, plus.
+    const cuts = [0, Math.ceil(span / 3), Math.ceil((span * 2) / 3)]
+    const suffixes = ['-', '', '+']
+
+    for (let j = 0; j < 3; j++) {
+      const threshold = cur.min + cuts[j]
+      const label = suffixes[j] ? `${cur.id}${suffixes[j]}` : cur.id
+      out.push({
+        id: label,
+        mainId: cur.id,
+        min: threshold,
+        title: cur.title,
+      })
+    }
+  }
+  return out
+}
+
+export const RANKS = buildRanks()
+
+/** Highest rank whose level threshold is met. */
+export function getRankForLevel(level) {
+  const lv = Number(level) || 1
   let rank = RANKS[0]
   for (const r of RANKS) {
-    if (rounds >= r.min) rank = r
+    if (lv >= r.min) rank = r
   }
   return rank
+}
+
+/** @deprecated Use getRankForLevel instead. */
+export function getRankForRounds(rounds) {
+  return getRankForLevel(rounds)
 }
 
 /** Curated titles with unlock conditions and passive EXP bonuses. */

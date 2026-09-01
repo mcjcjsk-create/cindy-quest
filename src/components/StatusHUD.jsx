@@ -8,7 +8,7 @@ import { Swords, Heart, Zap, Battery, Flame, Award } from 'lucide-react'
 import { useGame } from '../store/context'
 import {
   expToNext,
-  getRankForRounds,
+  getRankForLevel,
   computeStats,
   TITLES,
 } from '../lib/gamification'
@@ -44,7 +44,7 @@ function StatBar({ label, value, color, icon: Icon, sub }) {
 export default function StatusHUD() {
   const { state } = useGame()
   const stats = computeStats(state)
-  const rank = getRankForRounds(state.bestRounds)
+  const rank = getRankForLevel(state.level)
   const need = expToNext(state.level)
   const expPct = Math.min(100, Math.round((state.exp / need) * 100))
   const titleCount = state.unlockedTitles.length

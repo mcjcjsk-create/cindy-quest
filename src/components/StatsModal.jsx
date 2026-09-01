@@ -8,7 +8,7 @@ import { useGame } from '../store/context'
 import {
   computeStats,
   RANKS,
-  getRankForRounds,
+  getRankForLevel,
   TITLES,
 } from '../lib/gamification'
 
@@ -28,7 +28,7 @@ function Row({ icon: Icon, label, value, color }) {
 export default function StatsModal({ open, onClose }) {
   const { state } = useGame()
   const stats = computeStats(state)
-  const bestRank = getRankForRounds(state.bestRounds)
+  const bestRank = getRankForLevel(state.level)
   const best = {
     rounds: state.bestRounds,
     totalReps: state.bestTotalReps,
@@ -80,7 +80,7 @@ export default function StatsModal({ open, onClose }) {
           </div>
           <div className="space-y-1.5">
             {[...RANKS].reverse().map((r) => {
-              const reached = state.bestRounds >= r.min
+              const reached = state.level >= r.min
               const isCurrent = r.id === bestRank.id
               return (
                 <div
@@ -97,7 +97,7 @@ export default function StatsModal({ open, onClose }) {
                     <span className="font-display font-black">Rank {r.id}</span>
                     <span className="text-xs">{r.title}</span>
                   </span>
-                  <span className="font-display text-xs font-bold">{r.min}+ rounds</span>
+                  <span className="font-display text-xs font-bold">Level {r.min}+</span>
                 </div>
               )
             })}
