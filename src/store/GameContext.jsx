@@ -28,7 +28,7 @@ import {
   uid,
   TITLES,
 } from '../lib/gamification'
-import { WORKOUT, isHold } from '../data/workout'
+import { getProgram, isHold } from '../data/workout'
 import { loadState, saveState } from '../lib/storage'
 import { setMuted, playLevelUp } from '../lib/sound'
 import { startMusic, stopMusic, setMusicVolume } from '../lib/music'
@@ -48,15 +48,17 @@ function grantExp(state, raw) {
   return { ...state, level, exp, totalExp }
 }
 
-/** Zeroed per-exercise progress map derived from the workout definition. */
-function blankReps() {
-  return Object.fromEntries(WORKOUT.exercises.map((ex) => [ex.id, 0]))
+/** Zeroed per-exercise progress map derived from a program's exercise list. */
+function blankReps(program) {
+  return Object.fromEntries(program.exercises.map((ex) => [ex.id, 0]))
 }
 
-/** Config clamp ceiling: holds are configured in seconds (up to 120), reps up to 50. */
-const CFG_MAX = Object.fromEntries(
-  WORKOUT.exercises.map((ex) => [ex.id, isHold(ex) ? 120 : 50]),
-)
+/** Config clamp ceiling for a program: holds up to 120, reps up to 50. */
+function cfgMaxForProgram(program) {
+  return Object.fromEntries(
+    program.exercises.map((ex) => [ex.id, isHold(ex) ? 120 : 50]),
+  )
+}
 
 function reducer(state, action) {
   switch (action.type) {
@@ -117,16 +119,22 @@ function reducer(state, action) {
       return granted
     }
 
-    case 'startWorkout':
+    case 'selectProgram':
+      return { ...state, selectedProgram: action.programId }
+
+    case 'startWorkout': {
+      const program = getProgram(state.selectedProgram)
       return {
         ...state,
         session: {
           startedAt: Date.now(),
-          reps: blankReps(),
+          programId: state.selectedProgram,
+          reps: blankReps(program),
           rounds: 0,
           expEarned: 0,
         },
       }
+    }
 
     case 'abortWorkout':
       return { ...state, session: null }
@@ -195,6 +203,7 @@ function reducer(state, action) {
           id: uid(),
           date: new Date().toISOString(),
           dateStr: today,
+          programId: state.selectedProgram,
           durationSec,
           rounds,
           totalReps,
@@ -221,11 +230,13 @@ function reducer(state, action) {
 
     case 'setWorkoutReps': {
       const raw = action.reps || {}
+      const program = getProgram(state.selectedProgram)
+      const cfgMax = cfgMaxForProgram(program)
       const workoutReps = { ...state.workoutReps }
-      for (const ex of WORKOUT.exercises) {
+      for (const ex of program.exercises) {
         const v = Number(raw[ex.id])
         if (Number.isFinite(v)) {
-          workoutReps[ex.id] = Math.max(0, Math.min(CFG_MAX[ex.id], Math.round(v)))
+          workoutReps[ex.id] = Math.max(0, Math.min(cfgMax[ex.id], Math.round(v)))
         }
       }
       return { ...state, workoutReps }

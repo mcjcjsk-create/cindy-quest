@@ -8,7 +8,7 @@ import { motion } from 'framer-motion'
 import { ChevronDown, Trophy, Dumbbell, Timer } from 'lucide-react'
 import Modal from './Modal'
 import { useGame } from '../store/context'
-import { WORKOUT } from '../data/workout'
+import { getProgram } from '../data/workout'
 import { fmtClock } from '../lib/gamification'
 
 const RANK_COLORS = {
@@ -22,6 +22,7 @@ const RANK_COLORS = {
 
 function EntryRow({ entry }) {
   const [open, setOpen] = useState(false)
+  const program = getProgram(entry.programId)
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-900/40">
       <button
@@ -40,7 +41,7 @@ function EntryRow({ entry }) {
               {entry.rounds} rounds · {entry.totalReps} reps
             </div>
             <div className="text-[11px] text-slate-500">
-              {new Date(entry.date).toLocaleString()} · {fmtClock(entry.durationSec)}
+              {program.name} · {new Date(entry.date).toLocaleString()} · {fmtClock(entry.durationSec)}
             </div>
           </div>
         </div>
@@ -55,7 +56,7 @@ function EntryRow({ entry }) {
         className="overflow-hidden"
       >
         <div className="grid grid-cols-3 gap-2 border-t border-slate-800 px-3 py-2.5">
-          {WORKOUT.exercises.map((ex) => (
+          {program.exercises.map((ex) => (
             <div key={ex.id} className="text-center">
               <div className="flex items-center justify-center gap-1 text-[11px] text-slate-500">
                 <ex.icon className="h-3 w-3" /> {ex.name}

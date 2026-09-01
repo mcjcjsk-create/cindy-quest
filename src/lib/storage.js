@@ -5,11 +5,39 @@
  */
 
 import { todayStr } from './gamification'
+import { DEFAULT_PROGRAM_ID, PROGRAMS } from '../data/workout'
 
 const KEY = 'cindy-quest:save:v1'
 
+/** All known exercise IDs across all programs (used to initialize lifetimeReps). */
+const ALL_EXERCISE_IDS = Object.values(PROGRAMS).flatMap((p) =>
+  p.exercises.map((e) => e.id),
+)
+
+/** Build default workoutReps from each program's canonical defaults. */
+function defaultWorkoutReps() {
+  const out = {}
+  for (const program of Object.values(PROGRAMS)) {
+    for (const ex of program.exercises) {
+      if (!(ex.id in out)) out[ex.id] = isHold(ex) ? ex.targetSec : ex.reps
+    }
+  }
+  return out
+}
+
+/** True when the exercise is a timed hold. */
+function isHold(ex) {
+  return ex?.type === 'hold'
+}
+
+/** Max config value per exercise: holds up to 120s, reps up to 50. */
+function cfgMax(ex) {
+  return isHold(ex) ? 120 : 50
+}
+
 export const DEFAULT_STATE = {
   version: 1,
+  selectedProgram: DEFAULT_PROGRAM_ID,
   level: 1,
   exp: 0,
   totalExp: 0,
@@ -18,7 +46,7 @@ export const DEFAULT_STATE = {
   stamina: 100,
   staminaDate: todayStr(),
   muted: false,
-  lifetimeReps: { latPulldown: 0, pushup: 0, squat: 0, hollowBody: 0 },
+  lifetimeReps: Object.fromEntries(ALL_EXERCISE_IDS.map((id) => [id, 0])),
   lifetimeRounds: 0,
   lifetimeTotalReps: 0,
   completedWorkouts: 0,
@@ -30,18 +58,24 @@ export const DEFAULT_STATE = {
   session: null,
   musicOn: false,
   musicVolume: 0.8,
-  workoutReps: { latPulldown: 10, pushup: 10, squat: 10, hollowBody: 20 },
+  workoutReps: defaultWorkoutReps(),
 }
 
 /** Merge raw parsed data over defaults and repair any broken fields. */
 function normalize(parsed) {
   const base = { ...DEFAULT_STATE, ...parsed }
-  base.lifetimeReps = {
-    latPulldown: Number(base.lifetimeReps?.latPulldown) || 0,
-    pushup: Number(base.lifetimeReps?.pushup) || 0,
-    squat: Number(base.lifetimeReps?.squat) || 0,
-    hollowBody: Number(base.lifetimeReps?.hollowBody) || 0,
+
+  // Ensure selectedProgram is valid.
+  if (!(base.selectedProgram in PROGRAMS)) {
+    base.selectedProgram = DEFAULT_PROGRAM_ID
   }
+
+  // Build lifetimeReps from all known exercise IDs, preserving saved values.
+  const lr = base.lifetimeReps && typeof base.lifetimeReps === 'object' ? base.lifetimeReps : {}
+  base.lifetimeReps = Object.fromEntries(
+    ALL_EXERCISE_IDS.map((id) => [id, Number(lr[id]) || 0]),
+  )
+
   base.level = Math.max(1, Number(base.level) || 1)
   base.stamina = Math.max(0, Math.min(100, Number(base.stamina) || 100))
   base.streak = Math.max(0, Number(base.streak) || 0)
@@ -49,7 +83,18 @@ function normalize(parsed) {
   base.history = Array.isArray(base.history) ? base.history.slice(0, 60) : []
   base.musicOn = Boolean(base.musicOn)
   base.musicVolume = Math.max(0, Math.min(1, Number(base.musicVolume) || 0.8))
-  base.workoutReps = normalizeReps(base.workoutReps, DEFAULT_STATE.workoutReps)
+
+  // Validate workoutReps: preserve saved values for known exercises,
+  // add defaults for any new exercises from programs added after the save was created.
+  const wr = base.workoutReps && typeof base.workoutReps === 'object' ? base.workoutReps : {}
+  base.workoutReps = {}
+  for (const program of Object.values(PROGRAMS)) {
+    for (const ex of program.exercises) {
+      if (!(ex.id in base.workoutReps)) {
+        base.workoutReps[ex.id] = clampRep(wr[ex.id], isHold(ex) ? ex.targetSec : ex.reps, cfgMax(ex))
+      }
+    }
+  }
 
   // Daily stamina recovery.
   if (base.staminaDate !== todayStr()) {
@@ -63,17 +108,6 @@ function normalize(parsed) {
 function clampRep(v, fallback, max = 50) {
   const n = Number(v)
   return Number.isFinite(n) ? Math.max(0, Math.min(max, Math.round(n))) : fallback
-}
-
-/** Validate per-exercise round config (reps for tap exercises, seconds for holds). */
-function normalizeReps(reps, fallback) {
-  const src = reps && typeof reps === 'object' ? reps : {}
-  return {
-    latPulldown: clampRep(src.latPulldown, fallback.latPulldown),
-    pushup: clampRep(src.pushup, fallback.pushup),
-    squat: clampRep(src.squat, fallback.squat),
-    hollowBody: clampRep(src.hollowBody, fallback.hollowBody, 120),
-  }
 }
 
 /** Load state from localStorage, falling back to defaults. */

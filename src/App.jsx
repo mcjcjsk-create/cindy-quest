@@ -1,13 +1,14 @@
 /**
  * App.jsx
- * Root layout wiring together the HUD dashboard, workout engine,
- * modals and global FX layers.
+ * Root layout wiring together the HUD dashboard, program selector,
+ * workout engine, modals and global FX layers.
  */
 import { useState } from 'react'
 import { GameProvider } from './store/GameContext'
 import BackgroundFX from './components/BackgroundFX'
 import Header from './components/Header'
 import StatusHUD from './components/StatusHUD'
+import ProgramSelector from './components/ProgramSelector'
 import CindyTimerTracker from './components/CindyTimerTracker'
 import StatsModal from './components/StatsModal'
 import WorkoutHistoryLog, { RecentSessions } from './components/WorkoutHistoryLog'
@@ -35,6 +36,7 @@ function Shell() {
           </div>
 
           <div className="space-y-6">
+            <ProgramSelector />
             <CindyTimerTracker />
           </div>
         </main>

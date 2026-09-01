@@ -1,14 +1,13 @@
 /**
  * CindyTimerTracker.jsx
- * The interactive workout engine:
- *  - circular neon countdown timer (15:00) with start/pause/reset
- *  - tap-to-count rep tracker with per-exercise progress
- *  - timed hold exercises (e.g. Hollow Body): start/end early/auto-complete,
- *    converted to rep-equivalents via SEC_PER_HOLD_REP
- *  - configurable per-exercise targets (reps, or seconds for holds; 0 = auto-skip)
- *  - skip button to move past an exercise mid-round
- *  - auto round counter, live pacing (RPM) and projected score
- *  - complete / abort session flows wired into the game store
+ * The interactive workout engine supporting multiple program types:
+ *  - AMRAP mode (e.g. Cindy): circular neon countdown, tap-to-count reps,
+ *    timed holds, auto-skip for 0-target exercises
+ *  - Circuit mode (e.g. Dumbbell Circuit): round-based with rest periods
+ *    between rounds, target rounds specified per program
+ *
+ * Both modes share: tap-to-count reps, configurable per-exercise targets,
+ * skip button, round counter, live pacing, complete/abort session flows.
  */
 import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
@@ -29,9 +28,8 @@ import {
   SlidersHorizontal,
 } from 'lucide-react'
 import { useGame } from '../store/context'
-import { WORKOUT, isHold } from '../data/workout'
+import { getProgram, isHold } from '../data/workout'
 import {
-  WORKOUT_WINDOW_SEC,
   BASE_EXP,
   ROUND_EXP,
   REP_EXP,
@@ -45,7 +43,7 @@ const RADIUS = 104
 const CIRC = 2 * Math.PI * RADIUS
 
 /** Zeroed per-index progress map sized to the exercise cycle. */
-const blankProgress = () => Object.fromEntries(WORKOUT.exercises.map((_, i) => [i, 0]))
+const blankProgress = (exercises) => Object.fromEntries(exercises.map((_, i) => [i, 0]))
 
 function CircularTimer({ remaining, total }) {
   const frac = Math.max(0, remaining) / total
@@ -89,7 +87,7 @@ function CircularTimer({ remaining, total }) {
             {fmtClock(Math.max(0, remaining))}
           </span>
           <span className="mt-1 font-display text-[10px] font-bold tracking-[0.35em] text-slate-400 uppercase">
-            Time Remaining
+            {low ? 'Time Remaining' : 'Elapsed'}
           </span>
         </motion.div>
       </AnimatePresence>
@@ -100,16 +98,21 @@ function CircularTimer({ remaining, total }) {
 export default function CindyTimerTracker() {
   const { state, dispatch, notify } = useGame()
 
+  // Resolve the currently selected program.
+  const program = getProgram(state.selectedProgram)
+  const exercises = program.exercises
+  const isCircuit = program.type === 'circuit'
+
   const [run, setRunState] = useState(null)
   const runRef = useRef(null)
   const [flash, setFlash] = useState(null)
 
   // Configured per-round values from persisted player settings (reps or hold seconds).
-  const cfgTotal = WORKOUT.exercises.reduce((a, ex) => a + state.workoutReps[ex.id], 0)
-  const cfgRepsOnly = WORKOUT.exercises
+  const cfgTotal = exercises.reduce((a, ex) => a + state.workoutReps[ex.id], 0)
+  const cfgRepsOnly = exercises
     .filter((ex) => !isHold(ex))
     .reduce((a, ex) => a + state.workoutReps[ex.id], 0)
-  const cfgHoldSec = WORKOUT.exercises
+  const cfgHoldSec = exercises
     .filter(isHold)
     .reduce((a, ex) => a + state.workoutReps[ex.id], 0)
   const targetReps = (exId) => state.workoutReps[exId] ?? 0
@@ -123,11 +126,11 @@ export default function CindyTimerTracker() {
     let a = active
     let nextReps = { ...reps }
     let guard = 0
-    while (guard < WORKOUT.exercises.length) {
-      if (targetReps(WORKOUT.exercises[a].id) > 0) break
-      if (a === WORKOUT.exercises.length - 1) {
+    while (guard < exercises.length) {
+      if (targetReps(exercises[a].id) > 0) break
+      if (a === exercises.length - 1) {
         r += 1
-        nextReps = blankProgress()
+        nextReps = blankProgress(exercises)
         a = 0
       } else {
         a += 1
@@ -140,13 +143,13 @@ export default function CindyTimerTracker() {
 
   /** Advance one exercise forward (wrapping the round), then auto-skip 0-target ones. */
   function stepForward(rounds, active, reps) {
-    const exCount = WORKOUT.exercises.length
+    const exCount = exercises.length
     let r = rounds
     let nextReps = { ...reps }
     let a = active
     if (a === exCount - 1) {
       r += 1
-      nextReps = blankProgress()
+      nextReps = blankProgress(exercises)
       a = 0
     } else {
       a += 1
@@ -155,12 +158,29 @@ export default function CindyTimerTracker() {
     return resolveZeroSkips(r, a, nextReps)
   }
 
-  /** Apply a step/round transition: round EXP + sound + flash. */
+  /**
+   * Apply a step/round transition: round EXP + sound + flash.
+   * For circuit programs, intercepts round transitions to trigger rest periods.
+   */
   function applyStep(r, next) {
     if (next.rounds > r.rounds) {
       dispatch({ type: 'roundCompleted' })
       playRound()
       notify(`ROUND ${next.rounds} COMPLETE!`, 'round')
+
+      // Circuit mode: enter rest between rounds if more rounds remain.
+      if (isCircuit && program.roundTarget && next.rounds < program.roundTarget) {
+        setRun({
+          ...r,
+          rounds: next.rounds,
+          active: next.active,
+          reps: next.reps,
+          resting: true,
+          restRemaining: program.restSec || 90,
+          hold: null,
+        })
+        return
+      }
     }
     setFlash(next.active)
     window.setTimeout(() => setFlash((f) => (f === next.active ? null : f)), 400)
@@ -178,20 +198,44 @@ export default function CindyTimerTracker() {
       return next
     })
 
-  // Countdown engine — also drives the active hold's second-by-second ticking.
+  // Countdown engine — drives the active hold's second-by-second ticking and rest countdown.
   useEffect(() => {
     if (!run || run.status !== 'running') return
     const iv = window.setInterval(() => {
       const cur = runRef.current
       if (!cur) return
-      const remaining = cur.remaining - 1
-      if (remaining <= 10 && remaining > 0) playTick()
-      if (remaining <= 0) {
-        finishSession({ ...cur, remaining: 0 })
+
+      // Rest countdown (circuit mode).
+      if (cur.resting) {
+        const restRemaining = cur.restRemaining - 1
+        if (restRemaining <= 0) {
+          // Rest complete — start next round.
+          setRun({ ...cur, resting: false, restRemaining: 0, hold: null })
+        } else {
+          if (restRemaining <= 10) playTick()
+          setRun({ ...cur, restRemaining })
+        }
         return
       }
+
+      // Main timer countdown.
+      let remaining
+      if (isCircuit) {
+        // Circuit: count UP (elapsed time) — no main countdown.
+        // We still track total time for the session but don't auto-finish.
+        remaining = cur.remaining
+      } else {
+        // AMRAP: count DOWN.
+        remaining = cur.remaining - 1
+        if (remaining <= 10 && remaining > 0) playTick()
+        if (remaining <= 0) {
+          finishSession({ ...cur, remaining: 0 })
+          return
+        }
+      }
+
       let next = { ...cur, remaining }
-      const ex = WORKOUT.exercises[next.active]
+      const ex = exercises[next.active]
       if (next.hold?.active && isHold(ex)) {
         const held = next.hold.elapsed + 1
         next.hold = { ...next.hold, elapsed: held }
@@ -209,20 +253,22 @@ export default function CindyTimerTracker() {
   function startSession() {
     if (cfgTotal === 0) return
     dispatch({ type: 'startWorkout' })
-    const init = resolveZeroSkips(0, 0, blankProgress())
+    const init = resolveZeroSkips(0, 0, blankProgress(exercises))
     setRun({
       status: 'running',
-      remaining: WORKOUT_WINDOW_SEC,
+      remaining: program.windowSec,
       rounds: init.rounds,
       reps: init.reps,
       active: init.active,
       hold: null,
+      resting: false,
+      restRemaining: 0,
     })
   }
 
   /** Bank a finished/abandoned hold as rep-equivalents, then advance the cycle. */
   function completeHold(r, secondsHeld) {
-    const ex = WORKOUT.exercises[r.active]
+    const ex = exercises[r.active]
     const earned = Math.floor(Math.max(0, secondsHeld) / SEC_PER_HOLD_REP)
     if (earned > 0) {
       dispatch({ type: 'holdCompleted', exerciseId: ex.id, reps: earned })
@@ -233,8 +279,8 @@ export default function CindyTimerTracker() {
 
   function startHold() {
     const r = runRef.current
-    if (!r || r.status !== 'running') return
-    const ex = WORKOUT.exercises[r.active]
+    if (!r || r.status !== 'running' || r.resting) return
+    const ex = exercises[r.active]
     if (!isHold(ex) || r.hold?.active) return
     setRun({ ...r, hold: { active: true, elapsed: 0 } })
   }
@@ -248,12 +294,12 @@ export default function CindyTimerTracker() {
   function finishSession(r = runRef.current) {
     if (!r) return
     // Credit any hold still in progress when the session ends.
-    const ex = WORKOUT.exercises[r.active]
+    const ex = exercises[r.active]
     if (r.hold?.active && isHold(ex)) {
       const earned = Math.floor(r.hold.elapsed / SEC_PER_HOLD_REP)
       if (earned > 0) dispatch({ type: 'holdCompleted', exerciseId: ex.id, reps: earned })
     }
-    const elapsed = WORKOUT_WINDOW_SEC - r.remaining
+    const elapsed = program.windowSec - r.remaining
     dispatch({
       type: 'workoutFinished',
       rounds: r.rounds,
@@ -267,8 +313,8 @@ export default function CindyTimerTracker() {
 
   function tapRep() {
     const r = runRef.current
-    if (!r || r.status !== 'running') return
-    const ex = WORKOUT.exercises[r.active]
+    if (!r || r.status !== 'running' || r.resting) return
+    const ex = exercises[r.active]
     const target = targetReps(ex.id)
     if (target <= 0) return
     const reps = { ...r.reps, [r.active]: r.reps[r.active] + 1 }
@@ -285,14 +331,14 @@ export default function CindyTimerTracker() {
   /** Skip the active exercise without counting its reps. */
   function skipExercise() {
     const r = runRef.current
-    if (!r || r.status !== 'running') return
+    if (!r || r.status !== 'running' || r.resting) return
     applyStep(r, stepForward(r.rounds, r.active, r.reps))
   }
 
   function undoRep() {
     const r = runRef.current
-    if (!r || r.status !== 'running' || r.reps[r.active] <= 0) return
-    const ex = WORKOUT.exercises[r.active]
+    if (!r || r.status !== 'running' || r.resting || r.reps[r.active] <= 0) return
+    const ex = exercises[r.active]
     dispatch({ type: 'undoRep', exerciseId: ex.id })
     setRun({ ...r, reps: { ...r.reps, [r.active]: r.reps[r.active] - 1 } })
   }
@@ -300,15 +346,17 @@ export default function CindyTimerTracker() {
   function resetRun() {
     setRun((r) => {
       if (!r) return r
-      const init = resolveZeroSkips(0, 0, blankProgress())
+      const init = resolveZeroSkips(0, 0, blankProgress(exercises))
       return {
         ...r,
         status: 'paused',
-        remaining: WORKOUT_WINDOW_SEC,
+        remaining: program.windowSec,
         rounds: 0,
         reps: init.reps,
         active: init.active,
         hold: null,
+        resting: false,
+        restRemaining: 0,
       }
     })
   }
@@ -318,10 +366,16 @@ export default function CindyTimerTracker() {
     setRun(null)
   }
 
+  function skipRest() {
+    const r = runRef.current
+    if (!r || !r.resting) return
+    setRun({ ...r, resting: false, restRemaining: 0, hold: null })
+  }
+
   // Derived pacing.
-  const elapsedMin = run ? Math.max((WORKOUT_WINDOW_SEC - run.remaining) / 60, 0) : 0
+  const elapsedMin = run ? Math.max((program.windowSec - run.remaining) / 60, 0) : 0
   const rpm = run && elapsedMin > 0 ? run.rounds / elapsedMin : 0
-  const projected = run ? Math.round(rpm * 15 * 10) / 10 : 0
+  const projected = run ? Math.round(rpm * (program.windowSec / 60) * 10) / 10 : 0
   const projectedRank = getRankForRounds(Math.floor(projected))
 
   // ---- IDLE STATE ----
@@ -331,15 +385,15 @@ export default function CindyTimerTracker() {
         <div className="flex items-center justify-between">
           <div>
             <div className="font-display text-lg font-black tracking-widest text-slate-100">
-              {WORKOUT.name}
+              {program.name}
             </div>
-            <div className="hud-label">{WORKOUT.subtitle}</div>
+            <div className="hud-label">{program.subtitle}</div>
           </div>
           <Target className="h-7 w-7 text-cyber/80" />
         </div>
 
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
-          {WORKOUT.exercises.map((ex) => {
+          {exercises.map((ex) => {
             const val = state.workoutReps[ex.id]
             return (
               <div key={ex.id} className="rounded-lg border border-slate-800 bg-slate-900/40 p-3">
@@ -375,7 +429,7 @@ export default function CindyTimerTracker() {
             </span>
           </div>
           <div className="mt-2 space-y-2">
-            {WORKOUT.exercises.map((ex) => {
+            {exercises.map((ex) => {
               const val = state.workoutReps[ex.id]
               const off = val === 0
               const hold = isHold(ex)
@@ -440,10 +494,12 @@ export default function CindyTimerTracker() {
             <Zap className="h-4 w-4 text-cyber" />
             +{REP_EXP} EXP / rep · +{ROUND_EXP} EXP / round
           </span>
-          <span className="flex items-center gap-1.5">
-            <Hourglass className="h-4 w-4 text-cyber" />
-            Holds: +{REP_EXP} EXP per {SEC_PER_HOLD_REP}s held
-          </span>
+          {exercises.some(isHold) && (
+            <span className="flex items-center gap-1.5">
+              <Hourglass className="h-4 w-4 text-cyber" />
+              Holds: +{REP_EXP} EXP per {SEC_PER_HOLD_REP}s held
+            </span>
+          )}
           <span className="flex items-center gap-1.5">
             <Flag className="h-4 w-4 text-alert" />
             +{BASE_EXP} EXP base on completion
@@ -462,6 +518,88 @@ export default function CindyTimerTracker() {
     )
   }
 
+  // ---- REST STATE (circuit mode between rounds) ----
+  if (run.resting) {
+    const nextRound = run.rounds + 1
+    const progressPct = program.roundTarget
+      ? (run.rounds / program.roundTarget) * 100
+      : 0
+
+    return (
+      <section className="hud-card p-5">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="font-display text-sm font-black tracking-widest text-slate-100 uppercase">
+              Rest Period
+            </div>
+            <div className="hud-label">{program.name}</div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="rounded-md border border-arcane/50 bg-arcane/10 px-2.5 py-1 font-display text-lg font-black text-arcane text-glow-arcane">
+              {run.rounds}/{program.roundTarget}
+            </span>
+            <span className="hud-label">rounds</span>
+          </div>
+        </div>
+
+        <div className="mt-6 flex flex-col items-center gap-4">
+          <CircularTimer remaining={run.restRemaining} total={program.restSec || 90} />
+
+          <div className="text-center">
+            <div className="font-display text-xl font-black text-arcane text-glow-arcane">
+              REST — {nextRound <= program.roundTarget ? `Round ${nextRound} Next` : 'Done!'}
+            </div>
+            <div className="mt-1 text-sm text-slate-400">
+              Catch your breath before the next round
+            </div>
+          </div>
+
+          {/* Round progress bar */}
+          <div className="w-full max-w-xs">
+            <div className="stat-bar h-2">
+              <div
+                className="stat-bar-fill"
+                style={{
+                  width: `${progressPct}%`,
+                  background: 'linear-gradient(90deg,#c084fc66,#a855f7)',
+                  transition: 'width 0.3s ease',
+                }}
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setRun((r) => r && { ...r, status: r.status === 'running' ? 'paused' : 'running' })}
+              className="neon-btn-cyber flex items-center gap-2 rounded-lg px-4 py-2 font-display text-xs font-bold tracking-widest text-cyber uppercase"
+            >
+              {run.status === 'running' ? (
+                <><Pause className="h-4 w-4" /> Pause Rest</>
+              ) : (
+                <><Play className="h-4 w-4" /> Resume Rest</>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={skipRest}
+              className="flex items-center gap-1.5 rounded-lg border border-cyber/50 bg-cyber/10 px-3 py-2 text-xs font-bold text-cyber transition hover:bg-cyber/20"
+            >
+              <SkipForward className="h-4 w-4" /> Skip Rest
+            </button>
+            <button
+              type="button"
+              onClick={abortSession}
+              className="flex items-center gap-1.5 rounded-lg border border-alert/50 bg-alert/10 px-3 py-2 text-xs text-alert transition hover:bg-alert/20"
+            >
+              <X className="h-4 w-4" /> Abort
+            </button>
+          </div>
+        </div>
+      </section>
+    )
+  }
+
   // ---- ACTIVE STATE ----
   const doneUnits = Object.values(run.reps).reduce((a, b) => a + b, 0)
   const totalReps = doneUnits + run.rounds * cfgTotal
@@ -474,20 +612,23 @@ export default function CindyTimerTracker() {
           <div className="font-display text-sm font-black tracking-widest text-slate-100 uppercase">
             Quest In Progress
           </div>
-          <div className="hud-label">Cindy — AMRAP 15</div>
+          <div className="hud-label">{program.name}</div>
         </div>
         <div className="flex items-center gap-2">
           <span className="rounded-md border border-arcane/50 bg-arcane/10 px-2.5 py-1 font-display text-lg font-black text-arcane text-glow-arcane">
             {run.rounds}
           </span>
           <span className="hud-label">rounds</span>
+          {isCircuit && program.roundTarget && (
+            <span className="text-xs text-slate-500">/ {program.roundTarget}</span>
+          )}
         </div>
       </div>
 
       <div className="mt-4 grid gap-5 lg:grid-cols-[auto_1fr]">
         {/* Timer column */}
         <div className="flex flex-col items-center gap-3">
-          <CircularTimer remaining={run.remaining} total={WORKOUT_WINDOW_SEC} />
+          <CircularTimer remaining={run.remaining} total={program.windowSec} />
 
           <div className="flex items-center gap-2">
             <button
@@ -533,7 +674,7 @@ export default function CindyTimerTracker() {
                 {projected.toFixed(1)}
               </div>
               <div className="text-[10px] text-slate-500">
-                Rank {projectedRank.id} @ 15:00
+                Rank {projectedRank.id} @ {fmtClock(program.windowSec)}
               </div>
             </div>
           </div>
@@ -549,7 +690,7 @@ export default function CindyTimerTracker() {
           </div>
 
           <div className="flex flex-col gap-3">
-            {WORKOUT.exercises.map((ex, i) => {
+            {exercises.map((ex, i) => {
               const isActive = i === run.active
               const isFlash = flash === i
               const hold = isHold(ex)
@@ -614,7 +755,7 @@ export default function CindyTimerTracker() {
 
                   {isActive && (
                     <div className="mt-3 flex gap-2">
-                      {                      hold ? (
+                      {hold ? (
                         holding ? (
                           <>
                             <button
