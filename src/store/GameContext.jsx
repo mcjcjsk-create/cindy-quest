@@ -27,6 +27,7 @@ import {
   addDays,
   uid,
   TITLES,
+  weightMultiplier,
 } from '../lib/gamification'
 import { getProgram, isHold } from '../data/workout'
 import { loadState, saveState } from '../lib/storage'
@@ -48,6 +49,12 @@ function grantExp(state, raw) {
   return { ...state, level, exp, totalExp }
 }
 
+/** Compute effective REP_EXP with dumbbell weight multiplier. */
+function effectiveRepExp(state) {
+  const wm = weightMultiplier(state.dumbbellWeight)
+  return Math.max(1, Math.round(REP_EXP * wm))
+}
+
 /** Zeroed per-exercise progress map derived from a program's exercise list. */
 function blankReps(program) {
   return Object.fromEntries(program.exercises.map((ex) => [ex.id, 0]))
@@ -64,13 +71,14 @@ function reducer(state, action) {
   switch (action.type) {
     case 'repCompleted': {
       const ex = action.exerciseId
+      const repExp = effectiveRepExp(state)
       const next = {
         ...state,
         lifetimeReps: { ...state.lifetimeReps, [ex]: state.lifetimeReps[ex] + 1 },
         lifetimeTotalReps: state.lifetimeTotalReps + 1,
       }
       const before = next.totalExp
-      const granted = grantExp(next, REP_EXP)
+      const granted = grantExp(next, repExp)
       if (granted.session) {
         granted.session = {
           ...granted.session,
@@ -102,13 +110,14 @@ function reducer(state, action) {
       const ex = action.exerciseId
       const n = Math.max(0, Math.round(action.reps || 0))
       if (!n) return state
+      const repExp = effectiveRepExp(state)
       const next = {
         ...state,
         lifetimeReps: { ...state.lifetimeReps, [ex]: state.lifetimeReps[ex] + n },
         lifetimeTotalReps: state.lifetimeTotalReps + n,
       }
       const before = next.totalExp
-      const granted = grantExp(next, n * REP_EXP)
+      const granted = grantExp(next, n * repExp)
       if (granted.session) {
         granted.session = {
           ...granted.session,
@@ -142,12 +151,13 @@ function reducer(state, action) {
     case 'undoRep': {
       const ex = action.exerciseId
       if (state.lifetimeReps[ex] <= 0) return state
+      const repExp = effectiveRepExp(state)
       const session =
         state.session && state.session.reps[ex] > 0
           ? {
               ...state.session,
               reps: { ...state.session.reps, [ex]: state.session.reps[ex] - 1 },
-              expEarned: Math.max(0, state.session.expEarned - REP_EXP),
+              expEarned: Math.max(0, state.session.expEarned - repExp),
             }
           : state.session
       return {
@@ -155,8 +165,8 @@ function reducer(state, action) {
         session,
         lifetimeReps: { ...state.lifetimeReps, [ex]: state.lifetimeReps[ex] - 1 },
         lifetimeTotalReps: Math.max(0, state.lifetimeTotalReps - 1),
-        exp: Math.max(0, state.exp - REP_EXP),
-        totalExp: Math.max(0, state.totalExp - REP_EXP),
+        exp: Math.max(0, state.exp - repExp),
+        totalExp: Math.max(0, state.totalExp - repExp),
       }
     }
 
@@ -241,6 +251,12 @@ function reducer(state, action) {
       }
       return { ...state, workoutReps }
     }
+
+    case 'setDumbbellWeight':
+      return {
+        ...state,
+        dumbbellWeight: Math.max(0, Math.min(50, Number(action.value) || 10)),
+      }
 
     default:
       return state

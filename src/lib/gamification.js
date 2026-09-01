@@ -19,6 +19,36 @@ export const ROUND_EXP = 25
 /** Performance EXP per individual rep. */
 export const REP_EXP = 2
 
+/**
+ * Weight tier EXP multipliers for dumbbell exercises.
+ * Heavier weights grant more EXP per rep.
+ * Tiers: light (5-10kg) = 1.0x, medium (10-15kg) = 1.25x, heavy (15-20kg) = 1.5x, ultra (20kg+) = 2.0x
+ */
+export const WEIGHT_TIERS = [
+  { id: 'light', label: '5–10 kg', minKg: 5, maxKg: 10, mult: 1.0 },
+  { id: 'medium', label: '10–15 kg', minKg: 10, maxKg: 15, mult: 1.25 },
+  { id: 'heavy', label: '15–20 kg', minKg: 15, maxKg: 20, mult: 1.5 },
+  { id: 'ultra', label: '20+ kg', minKg: 20, maxKg: Infinity, mult: 2.0 },
+]
+
+/** Get the EXP multiplier for a given weight in kg. */
+export function weightMultiplier(kg) {
+  const n = Number(kg) || 0
+  for (const tier of WEIGHT_TIERS) {
+    if (n >= tier.minKg && n < tier.maxKg) return tier.mult
+  }
+  return n >= 20 ? 2.0 : 1.0
+}
+
+/** Get the weight tier info for display. */
+export function getWeightTier(kg) {
+  const n = Number(kg) || 0
+  for (const tier of WEIGHT_TIERS) {
+    if (n >= tier.minKg && n < tier.maxKg) return tier
+  }
+  return n >= 20 ? WEIGHT_TIERS[3] : WEIGHT_TIERS[0]
+}
+
 /** Hold-to-rep conversion: this many seconds of a timed hold equals one rep. */
 export const SEC_PER_HOLD_REP = 3
 

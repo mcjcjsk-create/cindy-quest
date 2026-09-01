@@ -59,6 +59,7 @@ export const DEFAULT_STATE = {
   musicOn: false,
   musicVolume: 0.8,
   workoutReps: defaultWorkoutReps(),
+  dumbbellWeight: 10,
 }
 
 /** Merge raw parsed data over defaults and repair any broken fields. */
@@ -83,6 +84,7 @@ function normalize(parsed) {
   base.history = Array.isArray(base.history) ? base.history.slice(0, 60) : []
   base.musicOn = Boolean(base.musicOn)
   base.musicVolume = Math.max(0, Math.min(1, Number(base.musicVolume) || 0.8))
+  base.dumbbellWeight = Math.max(0, Math.min(50, Number(base.dumbbellWeight) || 10))
 
   // Validate workoutReps: preserve saved values for known exercises,
   // add defaults for any new exercises from programs added after the save was created.
